@@ -54,6 +54,15 @@ export class Store {
     return this.db.prepare('SELECT 1 FROM listings WHERE watch_id = ? LIMIT 1').get(watchId) !== undefined;
   }
 
+  /** Há anúncio aprovado que ainda não foi notificado (1ª leitura parcial ou envio que falhou). */
+  hasPending(watchId: string): boolean {
+    return (
+      this.db
+        .prepare('SELECT 1 FROM listings WHERE watch_id = ? AND last_matched = 1 AND notified_price_cents IS NULL LIMIT 1')
+        .get(watchId) !== undefined
+    );
+  }
+
   recordSeen(watchId: string, l: Listing, matched: boolean, now: Date): void {
     const ts = now.toISOString();
     this.db

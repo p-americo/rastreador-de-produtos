@@ -180,6 +180,8 @@ export function watchConfig(
       }
     }, 300);
   });
+  // sem listener, um erro do watcher (ex.: EPERM no Windows) viraria uncaughtException
+  watcher.on('error', (e) => onError(e));
   return () => {
     clearTimeout(timer);
     watcher.close();

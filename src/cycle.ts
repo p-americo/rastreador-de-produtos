@@ -33,6 +33,8 @@ export interface CycleResult {
   /** Alertas entregues ao notificador. */
   alerts: number;
   notifyErrors: string[];
+  /** Falhas do SQLite ao marcar alertas já entregues (não são falha do Discord). */
+  dbErrors: string[];
   brokenLayout: boolean;
   error?: string;
   ms: number;
@@ -53,7 +55,8 @@ export function isBrokenLayout(listings: Listing[], emptyResult: boolean): boole
 export async function runCycle(watch: Watch, deps: CycleDeps): Promise<CycleResult> {
   const started = Date.now();
   const source = deps.getSource(watch.source);
-  const totalPages = deps.store.hasAny(watch.id) ? 1 : deps.initialPages;
+  // lê as páginas iniciais também quando sobrou anúncio aprovado sem aviso (1ª leitura parcial ou envio que falhou)
+  const totalPages = deps.store.hasAny(watch.id) && !deps.store.hasPending(watch.id) ? 1 : deps.initialPages;
   const byId = new Map<string, Listing>();
   let pagesRead = 0;
   let brokenLayout = false;
@@ -69,6 +72,7 @@ export async function runCycle(watch: Watch, deps: CycleDeps): Promise<CycleResu
           matched: 0,
           alerts: 0,
           notifyErrors: [],
+          dbErrors: [],
           brokenLayout: false,
           error: out.kind === 'error' ? out.error.message : undefined,
           ms: Date.now() - started,
@@ -94,14 +98,23 @@ export async function runCycle(watch: Watch, deps: CycleDeps): Promise<CycleResu
   }
 
   const notifyErrors: string[] = [];
+  const dbErrors: string[] = [];
   let delivered = 0;
   for (const group of chunk(alerts, 10)) {
     try {
       await deps.notifier.send(group);
-      for (const a of group) deps.store.markNotified(watch.id, a.listing, now);
-      delivered += group.length;
     } catch (e) {
       notifyErrors.push((e as Error).message);
+      continue;
+    }
+    // já entregue: falha do banco ao marcar não é falha do Discord (e cada alerta é marcado à parte)
+    delivered += group.length;
+    for (const a of group) {
+      try {
+        deps.store.markNotified(watch.id, a.listing, now);
+      } catch (e) {
+        dbErrors.push(`banco: ${a.listing.id}: ${(e as Error).message}`);
+      }
     }
   }
 
@@ -112,6 +125,7 @@ export async function runCycle(watch: Watch, deps: CycleDeps): Promise<CycleResu
     matched,
     alerts: delivered,
     notifyErrors,
+    dbErrors,
     brokenLayout,
     ms: Date.now() - started,
   };

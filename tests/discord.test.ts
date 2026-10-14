@@ -103,6 +103,22 @@ describe('DiscordNotifier', () => {
     );
   });
 
+  it('limita a espera de retry_after a 30 s', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ retry_after: 120 }), { status: 429 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const sleep = vi.fn(async (_ms: number) => {});
+    await new DiscordNotifier({ defaultUrl: 'https://discord.test/d', fetchFn, sleep }).send([alert()]);
+    expect(sleep).toHaveBeenCalledWith(30_000);
+  });
+
+  it('o fetch recebe um signal de timeout', async () => {
+    const fetchFn = ok204();
+    await new DiscordNotifier({ defaultUrl: 'https://discord.test/d', fetchFn }).notify('oi');
+    expect(fetchFn.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('em 429 espera retry_after e reenvia', async () => {
     const fetchFn = vi
       .fn(async (_url: string, _init: RequestInit) => new Response(null, { status: 204 }))

@@ -30,6 +30,18 @@ describe('OpsAlerts', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it('se o envio falhar, o aviso não fica marcado e o próximo raise tenta de novo', async () => {
+    const send = vi.fn(async (_t: string) => {}).mockRejectedValueOnce(new Error('discord fora'));
+    const ops = new OpsAlerts(send, () => {});
+    await ops.raise('k', 'a');
+    expect(ops.isActive('k')).toBe(false);
+    await ops.raise('k', 'a');
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(ops.isActive('k')).toBe(true);
+    await ops.raise('k', 'a');
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
   it('falha de envio é registrada no log e não lança', async () => {
     const log = vi.fn();
     const ops = new OpsAlerts(async () => {

@@ -149,6 +149,7 @@ async function main(): Promise<void> {
         (r.error ? ` erro=${r.error}` : ''),
     );
     for (const e of r.notifyErrors) log(`[${watch.id}] falha ao notificar (tento de novo no próximo ciclo): ${e}`);
+    for (const e of r.dbErrors) log(`[${watch.id}] alerta enviado, mas falhou ao gravar no banco (${e}); pode ser reenviado`);
 
     if (r.outcome !== 'error') {
       errorSince.delete(src);
@@ -228,6 +229,7 @@ async function main(): Promise<void> {
         matched: 0,
         alerts: 0,
         notifyErrors: [],
+        dbErrors: [],
         brokenLayout: false,
         error: e.message,
         ms: Date.now() - started,

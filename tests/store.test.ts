@@ -24,6 +24,19 @@ describe('Store', () => {
     expect(s.get('ps-vita', l)).toBeUndefined();
   });
 
+  it('hasPending: aprovado e ainda não notificado', () => {
+    const s = new Store(':memory:');
+    const l = makeListing({ id: '1', priceCents: 100_000 });
+    expect(s.hasPending('switch')).toBe(false);
+    s.recordSeen('switch', makeListing({ id: '0' }), false, T0);
+    expect(s.hasPending('switch')).toBe(false); // não aprovado não conta
+    s.recordSeen('switch', l, true, T0);
+    expect(s.hasPending('switch')).toBe(true);
+    expect(s.hasPending('ps-vita')).toBe(false);
+    s.markNotified('switch', l, T0);
+    expect(s.hasPending('switch')).toBe(false);
+  });
+
   it('atualiza preço e filtro ao ver de novo', () => {
     const s = new Store(':memory:');
     s.recordSeen('switch', makeListing({ id: '1', priceCents: 100_000 }), false, T0);

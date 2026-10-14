@@ -107,6 +107,49 @@ describe('runCycle', () => {
     expect(store.get('switch', A)?.notifiedPriceCents).toBe(100_000);
   });
 
+  it('falha do banco ao marcar: o grupo conta como entregue, não reenvia e registra erro de banco', async () => {
+    const { fetcher, notifier, store, run } = setup();
+    fetcher.pages = { 'fake://switch/1': ok(A, C) };
+    store.markNotified = () => {
+      throw new Error('database is locked');
+    };
+    const r = await run();
+    expect(notifier.sent).toHaveLength(1);
+    expect(r.alerts).toBe(2);
+    expect(r.notifyErrors).toEqual([]);
+    expect(r.dbErrors).toHaveLength(2);
+    expect(r.dbErrors[0]).toContain('database is locked');
+  });
+
+  it('um alerta que falha ao marcar não impede de marcar os demais do grupo', async () => {
+    const { fetcher, store, run } = setup();
+    fetcher.pages = { 'fake://switch/1': ok(A, C) };
+    const original = store.markNotified.bind(store);
+    store.markNotified = (w, l, n) => {
+      if (l.id === 'A') throw new Error('database is locked');
+      original(w, l, n);
+    };
+    const r = await run();
+    expect(r.dbErrors).toHaveLength(1);
+    expect(store.get('switch', C)?.notifiedPriceCents).toBe(110_000);
+  });
+
+  it('1ª leitura com envio falho: o ciclo seguinte lê as páginas iniciais de novo; o 3º volta à página 1', async () => {
+    const { fetcher, notifier, store, run } = setup();
+    fetcher.pages = { 'fake://switch/1': ok(A), 'fake://switch/2': ok(C), 'fake://switch/3': ok() };
+    notifier.failNext = true;
+    await run();
+    expect(store.hasPending('switch')).toBe(true);
+    fetcher.calls = [];
+    const r2 = await run();
+    expect(fetcher.calls).toEqual(['fake://switch/1', 'fake://switch/2', 'fake://switch/3']);
+    expect(r2.alerts).toBe(2);
+    expect(store.hasPending('switch')).toBe(false);
+    fetcher.calls = [];
+    await run();
+    expect(fetcher.calls).toEqual(['fake://switch/1']);
+  });
+
   it('desafio na página 1: nada é gravado nem enviado', async () => {
     const { fetcher, notifier, store, run } = setup();
     fetcher.pages = { 'fake://switch/1': { kind: 'challenge' } };

@@ -66,6 +66,7 @@ export class DiscordNotifier implements Notifier {
       fetchFn?: FetchFn;
       sleep?: (ms: number) => Promise<void>;
       maxAttempts?: number;
+      timeoutMs?: number;
     },
   ) {}
 
@@ -95,11 +96,13 @@ export class DiscordNotifier implements Notifier {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15_000),
       });
       if (res.ok) return;
       if (res.status === 429 && attempt < maxAttempts) {
         const data = (await res.json().catch(() => ({}))) as { retry_after?: number };
-        await sleep(Math.ceil((data.retry_after ?? 1) * 1000));
+        // teto de 30 s: um retry_after enorme não pode prender o ciclo
+        await sleep(Math.ceil(Math.min(data.retry_after ?? 1, 30) * 1000));
         continue;
       }
       const detail = (await res.text().catch(() => '')).slice(0, 200);

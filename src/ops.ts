@@ -10,7 +10,8 @@ export class OpsAlerts {
   async raise(key: string, text: string): Promise<void> {
     if (this.active.has(key)) return;
     this.active.add(key);
-    await this.safeSend(text);
+    // envio falhou: solta a chave para o próximo raise tentar de novo
+    if (!(await this.safeSend(text))) this.active.delete(key);
   }
 
   async clear(key: string, text?: string): Promise<void> {
@@ -22,11 +23,13 @@ export class OpsAlerts {
     return this.active.has(key);
   }
 
-  private async safeSend(text: string): Promise<void> {
+  private async safeSend(text: string): Promise<boolean> {
     try {
       await this.send(text);
+      return true;
     } catch (e) {
       this.log(`falha ao enviar aviso: ${(e as Error).message}`);
+      return false;
     }
   }
 }

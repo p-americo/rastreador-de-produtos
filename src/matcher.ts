@@ -31,6 +31,7 @@ export function match(listing: Listing, watch: Watch): MatchResult {
   return { ok: true };
 }
 
+// watch.pickupCities já vem normalizado por config.ts (parsePickupCity)
 function inPickupCity(listing: Listing, watch: Watch): boolean {
   if (!listing.city || !listing.state) return false;
   const city = normalize(listing.city);

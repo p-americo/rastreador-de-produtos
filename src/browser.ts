@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { type BrowserContext, type Page, chromium } from 'playwright';
 import type { FetchOutcome, PageFetcher } from './cycle.ts';
 import type { Source } from './sources/index.ts';
+import { withTimeout } from './timeout.ts';
+
+const SNAPSHOT_TIMEOUT_MS = 15_000;
 
 /** Um Chromium com perfil persistente e uma aba por chave (fonte). Relança se fechar. */
 export class BrowserManager {
@@ -36,6 +39,12 @@ export class BrowserManager {
     return page;
   }
 
+  /** Aba já aberta (sem criar nem relançar o navegador). */
+  peek(key: string): Page | undefined {
+    const page = this.pages.get(key);
+    return page && !page.isClosed() ? page : undefined;
+  }
+
   async bringToFront(key: string): Promise<void> {
     await this.pages.get(key)?.bringToFront();
   }
@@ -46,13 +55,17 @@ export class BrowserManager {
     if (!page || page.isClosed()) throw new Error(`nenhuma aba aberta para "${key}"`);
     mkdirSync(dir, { recursive: true });
     const base = join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}`);
-    writeFileSync(`${base}.html`, await page.content());
-    await page.screenshot({ path: `${base}.png`, fullPage: true });
+    writeFileSync(`${base}.html`, await withTimeout(page.content(), SNAPSHOT_TIMEOUT_MS, 'leitura do HTML'));
+    await page.screenshot({ path: `${base}.png`, fullPage: true, timeout: SNAPSHOT_TIMEOUT_MS });
     return base;
   }
 
+  /** Fecha o navegador. O estado é zerado antes, então o próximo uso relança o Chromium. */
   async close(): Promise<void> {
-    await this.ctx?.close();
+    const ctx = this.ctx;
+    this.ctx = undefined;
+    this.pages.clear();
+    await ctx?.close();
   }
 }
 

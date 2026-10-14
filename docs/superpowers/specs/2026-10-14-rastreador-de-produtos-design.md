@@ -108,8 +108,13 @@ settings:
   retentionDays: 30
 
 defaults:
-  exclude: [capa, case, bolsa, pelicula avulsa, defeito, quebrado, pecas,
-            sucata, troco, troca, aluguel, procuro, compro, so jogo, caixa vazia]
+  # palavras ignoradas no INÍCIO do título antes de checar startsWith
+  ignorePrefixes: [console, nintendo, nitendo, sony, playstation, video game,
+                   videogame, vendo, vende se, novo, nova]
+  # só problemas reais; acessórios NÃO entram aqui (ver seção 5)
+  exclude: [defeito, defeituoso, quebrado, quebrada, nao liga, nao funciona,
+            pecas, sucata, troco, so troca, somente troca, apenas troca,
+            procuro, compro, aluguel, caixa vazia, so a caixa, somente a caixa]
 
 watches:
   - id: switch-lite
@@ -117,17 +122,18 @@ watches:
     source: olx
     query: switch lite
     region: brasil
-    maxPrice: 800
-    minPrice: 300
-    include: [lite]
+    maxPrice: 900
+    minPrice: 400
+    startsWith: ["switch lite|swich lite|switchlite"]
 
   - id: switch
     name: Nintendo Switch (demais modelos)
     source: olx
     query: nintendo switch
     region: sp
-    maxPrice: 1100
+    maxPrice: 1200
     minPrice: 400
+    startsWith: ["switch|swich"]
     exclude: [lite]
 
   - id: ps-vita
@@ -135,12 +141,14 @@ watches:
     source: olx
     query: ps vita
     region: brasil
-    maxPrice: 600
-    minPrice: 200
-    include: ["vita|psvita"]
+    maxPrice: 700
+    minPrice: 300
+    startsWith: ["ps vita|psvita|vita"]
 ```
 
-Os valores de preço acima são exemplos. O usuário define os reais.
+Os valores de preço acima são exemplos. O usuário define os reais. Referência de mercado coletada em 2026-10-14: Switch Lite a partir de ~R$ 850, PS Vita a partir de ~R$ 370 e Switch V1/V2 a partir de ~R$ 1.150.
+
+**Calibragem do `minPrice`:** é um equilíbrio. Alto demais perde a oferta rara; baixo demais deixa passar um jogo ocasional. Como perder uma oferta custa mais que receber um alerta errado, o piso deve ficar **logo acima do preço dos jogos/acessórios que escapam do filtro de texto**, e não perto do preço de mercado. Nos dados reais, os jogos que escaparam custavam até R$ 289 e o console mais barato custava R$ 370; daí os pisos de exemplo de 300/400.
 
 ### Campos de um produto (`watch`)
 
@@ -154,8 +162,10 @@ Os valores de preço acima são exemplos. O usuário define os reais.
 | `searchUrl` | sim\* | URL de busca pronta da fonte; substitui `query` + `region`. A ordenação por mais recentes e a paginação são aplicadas por cima |
 | `maxPrice` | sim | Teto em reais (inclusivo) |
 | `minPrice` | não | Piso em reais (inclusivo); corta iscas e acessórios |
-| `include` | não | Termos que **todos** devem aparecer no título; `a\|b` aceita qualquer alternativa |
+| `startsWith` | sim | Formas de escrever o produto (`a\|b` = alternativas, incluindo erros de digitação comuns). O título, após remover `ignorePrefixes` do início, precisa **começar** com uma delas |
+| `include` | não | Termos que **todos** devem aparecer em qualquer ponto do título; `a\|b` aceita qualquer alternativa |
 | `exclude` | não | Termos que descartam o anúncio; somados a `defaults.exclude` |
+| `ignorePrefixes` | não | Somados a `defaults.ignorePrefixes` |
 | `enabled` | não | `false` desativa sem apagar (padrão `true`) |
 | `webhookEnv` | não | Nome da variável de ambiente com outro webhook (ex.: um canal por produto) |
 
@@ -163,7 +173,7 @@ Os valores de preço acima são exemplos. O usuário define os reais.
 
 ### Modelagem dos produtos Switch
 
-Switch Lite e os demais Switch (V1, V2, OLED, Switch 2) são **dois produtos com tetos diferentes**. O produto "demais modelos" usa `exclude: [lite]` para que um anúncio de Lite nunca seja avaliado pelo teto maior. O produto Lite usa `include: [lite]`.
+Switch Lite e os demais Switch (V1, V2, OLED, Switch 2) são **dois produtos com tetos diferentes**. O produto "demais modelos" usa `exclude: [lite]` para que um anúncio de Lite nunca seja avaliado pelo teto maior. O produto Lite exige `startsWith: switch lite`, então um "Nintendo Switch Desbloqueado + MicroSD" que apareça na busca do Lite é descartado ali e capturado pelo outro produto.
 
 ### Recarga a quente
 
@@ -171,15 +181,33 @@ O arquivo é observado. Se a nova versão for válida, passa a valer no próximo
 
 ## 5. Regras de filtro (`matcher`)
 
-1. **Normalização:** título em minúsculas, sem acentos (NFD + remoção de diacríticos), pontuação trocada por espaço e espaços colapsados. O mesmo vale para os termos da config.
-2. **Casamento por palavra/frase inteira:** um termo casa se aparece delimitado por início/fim ou espaço (`case` não casa com `casei`; `pelicula avulsa` casa como frase).
-3. **include:** todos os termos precisam casar; um termo com `|` casa se qualquer alternativa casar.
-4. **exclude:** se qualquer termo (`defaults.exclude` ∪ `watch.exclude`) casar, o anúncio é descartado.
-5. **Preço:** precisa haver preço e `minPrice ≤ preço ≤ maxPrice`. Anúncio sem preço é descartado.
-6. Anúncios "Impulsionados" **não** são descartados.
-7. O matcher retorna `{ ok: true }` ou `{ ok: false, reason }` (ex.: `exclude:"defeito"`, `price>max`). O motivo é usado pelo comando `check`.
+### Princípio
+
+Quando um acessório ou jogo é **o item vendido**, ele aparece **antes** do console no título ("Case Nintendo switch LITE", "Capinha psvita 2000", "Jogo PS Vita…", "Controle sem fio para Nintendo Switch", "Carregador original de PS Vita"). Quando é **brinde**, aparece **depois** ("Switch Lite com caixa + película", "Nintendo Switch Lite Coral Case + Película + Carregador"). Por isso o filtro principal é **"o título começa com o produto"**, e palavras de acessório **não** entram em `exclude`. Se entrassem, descartariam consoles vendidos com capa, case ou película, que costumam ser bons negócios.
+
+### Regras, na ordem
+
+1. **Normalização:** título em minúsculas, sem acentos (NFD + remoção de diacríticos), qualquer caractere fora de `a-z0-9` trocado por espaço e espaços colapsados. O mesmo vale para os termos da config. Ex.: "?Nintendo Switch-Lite!" → `nintendo switch lite`.
+2. **Remoção de prefixos:** enquanto o título começar com um termo de `ignorePrefixes` (como palavra/frase inteira), esse termo é removido. Ex.: `console nintendo switch oled` → `switch oled`; `playstation vita fat` → `vita fat`.
+3. **startsWith:** o título resultante precisa começar com uma das alternativas, como palavra/frase inteira (`switch` casa com `switch oled`, mas não com `switchx`). Caso contrário: `reason: "startsWith"`.
+4. **include:** todos os termos precisam aparecer em algum ponto do título normalizado, como palavra/frase inteira; `|` = alternativas.
+5. **exclude:** se qualquer termo (`defaults.exclude` ∪ `watch.exclude`) aparecer como palavra/frase inteira, o anúncio é descartado. Ex.: `troco` descarta "Pokemon Sword e Shield - Troco", mas "Avaliamos troca" passa, porque só `so troca`/`somente troca`/`apenas troca` são excluídos.
+6. **Preço:** precisa haver preço e `minPrice ≤ preço ≤ maxPrice`. Anúncio sem preço é descartado. O `minPrice` é a rede de segurança para o que escapar do texto.
+7. Anúncios "Impulsionados" **não** são descartados.
+8. O matcher retorna `{ ok: true }` ou `{ ok: false, reason }` (ex.: `startsWith`, `exclude:"defeito"`, `price>max`). O motivo é usado pelo comando `check`.
 
 Só o **título** é avaliado. A descrição exigiria abrir cada anúncio, o que multiplicaria as requisições.
+
+### Validação com dados reais (2026-10-14)
+
+As regras 1–5 foram simuladas em ~150 títulos reais das buscas "switch lite", "nintendo switch" e "ps vita" (categoria Games, mais recentes), salvos em `tests/fixtures/titles.json`:
+
+- **Todos os consoles foram aprovados**, inclusive "…com Case e Capas", "…Case + Película + Carregador", "/ capinha Acrílico", "Avaliamos Troca", "Nitendo swich lite" e "Psvita" (R$ 370).
+- **Acessórios e jogos com o item no início foram descartados:** "Case Nintendo switch LITE", "Capinha psvita 2000", "Kit PS Vita…", "Controle Sem Fio… Switch Lite", "Memory Card PSVita", "Carregador Original de PS Vita", "Jogo… PS Vita", "Yu-Gi-Oh! Rush Duel - Nintendo Switch", "Animal Crossing… - Nintendo Switch".
+- **Lites foram descartados no produto "demais modelos"**, e o "Nintendo Switch Desbloqueado + MicroSD…" foi descartado no produto Lite.
+- **Escaparam do filtro de texto 4 jogos**, todos no formato "<produto> - <nome do jogo>": "Psvita - Caligula…" (R$ 189), "Psvita - MotoGP 13…" (R$ 259), "Psvita - Stranger of Sword City…" (R$ 289) e "Nintendo Switch 2 - EA FC 26" (R$ 200). Os pisos de exemplo (300/400) eliminam todos.
+
+Avaliado e rejeitado: excluir a palavra `jogo` (singular). Ela removeria um desses jogos, mas também descartaria anúncios como "PS Vita com jogo".
 
 ## 6. Fluxo de dados
 
@@ -290,8 +318,8 @@ Desenvolvimento com TDD (`vitest`). **Nenhum teste automatizado acessa a OLX ou 
 
 | Alvo | Cobertura |
 |---|---|
-| `matcher` | normalização de acentos/maiúsculas; palavra inteira (`case` ≠ `casei`); frases; alternativas `\|`; soma de exclusões; limites inclusivos; sem preço; "Switch Lite R$ 950" recusado no produto "demais modelos" |
-| `config` | válido/inválido; exatamente um entre `query`/`searchUrl`; mescla de `defaults`; recarga inválida mantém a anterior |
+| `matcher` | normalização de acentos/maiúsculas/pontuação; remoção de prefixos repetidos; `startsWith` como palavra inteira; alternativas `\|` (incluindo "Nitendo swich lite"); soma de exclusões; limites inclusivos; sem preço; "Switch Lite R$ 950" recusado no produto "demais modelos". **Tabela de títulos reais** (`tests/fixtures/titles.json`, seção 5), com o resultado esperado por produto sem preço e com os pisos de exemplo, incluindo: aprovados "…com Case e Capas", "…Case + Película + Carregador", "Avaliamos Troca"; descartados "Case Nintendo switch LITE", "Capinha psvita 2000", "Controle Sem Fio… Switch Lite", "Jogo… PS Vita", "Yu-Gi-Oh! Rush Duel - Nintendo Switch" |
+| `config` | válido/inválido; exatamente um entre `query`/`searchUrl`; `startsWith` obrigatório; mescla de `defaults` (`exclude`, `ignorePrefixes`); recarga inválida mantém a anterior |
 | `sources/olx` | `buildUrl` (região, acentos na busca, ordenação por recentes, paginação, `searchUrl`); `extract` contra HTML real salvo em `tests/fixtures/`, carregado no Chromium sem rede; `detectBlock` com fixture de desafio |
 | `decide` | um teste por linha da tabela da seção 6 |
 | `store` | SQLite em memória: inserir, atualizar, marcar notificado, limpeza por retenção |

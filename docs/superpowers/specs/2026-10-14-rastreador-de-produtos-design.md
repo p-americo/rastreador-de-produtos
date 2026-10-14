@@ -15,6 +15,8 @@ O sistema deve ser **agnóstico**: adicionar novos produtos é editar um arquivo
 - Um anúncio novo dentro das regras gera notificação no Discord em até ~40s após aparecer na busca da OLX.
 - Cada anúncio notifica **uma única vez**, salvo em caso de nova queda de preço.
 - Acessórios, aparelhos com defeito, trocas e anúncios-isca são filtrados por regras configuráveis.
+- Só são notificados anúncios que **podem ser comprados imediatamente** (botão "Comprar" com Garantia da OLX). Anúncios que exigem "Solicitar" ao vendedor nunca notificam. Essa regra é fixa.
+- Fora das cidades de retirada configuradas (inicialmente Goiânia-GO), só são aceitos anúncios **com entrega**.
 - Bloqueios e quebras de layout geram aviso. O rastreador nunca falha em silêncio enquanto está rodando.
 
 ### Contexto e premissas
@@ -30,6 +32,22 @@ Investigação feita em 2026-10-14:
 - Uma requisição HTTP simples (`fetch` do Node com cabeçalhos de navegador) para a busca da OLX recebe **403 da Cloudflare** ("Attention Required").
 - A mesma URL num navegador real carrega normalmente. A página de busca renderiza cards `section.olx-adcard` (50 por página) com título, preço, cidade/bairro, data/hora, link (`…-<listId>`), miniatura e a marca "Impulsionado" quando aplicável.
 - A página é Next.js (App Router). Não há `__NEXT_DATA__`; os dados vêm em chunks `self.__next_f.push`. A extração será feita **pelo DOM renderizado**.
+
+### Compra imediata, entrega e localização (verificado em 2026-10-14)
+
+Anúncios abertos manualmente, comparando o selo no card da busca com o botão no anúncio:
+
+| Selo no card da busca | Botão no anúncio | Comprável |
+|---|---|---|
+| "Entrega Fácil" | "Comprar" + "Garantia da OLX" | sim |
+| "Frete grátis" | "Comprar" + "Garantia da OLX" | sim |
+| só "Parcele sem juros" | "Solicitar" ("Solicite ao vendedor a ativação do pagamento online e Garantia da OLX") | não |
+| nenhum selo (ex.: "Retirada em Guarulhos", "somente retirada em Joinville") | "Solicitar" | não |
+
+- "Parcele sem juros" **não** indica compra imediata.
+- O parâmetro de URL **`opst=2`** ("Veja anúncios com Entrega") restringe a busca a anúncios compráveis: 50 de 50 tinham "Entrega Fácil" ou "Frete grátis".
+- Não foi encontrado nenhum anúncio comprável sem entrega. Na OLX de hoje, **comprável ⇒ com entrega**.
+- Região por caminho: `/games/consoles-de-video-game/estado-go` (estado) e `/estado-go/grande-goiania-e-anapolis` (região). O card mostra "Cidade, Bairro", e o subdomínio do link do anúncio traz a UF (`go.olx.com.br`).
 
 **Decisão:** controlar um **navegador real (Playwright + Chromium)** com perfil persistente. O rastreador **não tenta burlar** proteções anti-bot (sem disfarce de assinatura TLS, sem resolução automática de desafios). Se surgir um desafio, ele pausa e pede ao usuário que resolva manualmente.
 
@@ -66,9 +84,14 @@ interface Listing {
   priceCents: number | null;
   url: string;
   image?: string;
-  location?: string;       // "Americana, Jardim Boer I"
+  location?: string;       // texto bruto: "Americana, Jardim Boer I"
+  city?: string;           // "Americana"
+  state?: string;          // "SP" (UF)
   postedAt?: string;       // texto ou ISO, como a fonte fornecer
   boosted: boolean;        // "Impulsionado"
+  buyable: boolean;        // pode ser comprado agora, sem solicitar ao vendedor
+  delivery: boolean;       // vendedor oferece entrega/envio
+  deliveryLabel?: string;  // "Entrega Fácil" | "Frete grátis"
 }
 
 interface Source {
@@ -111,6 +134,8 @@ defaults:
   # palavras ignoradas no INÍCIO do título antes de checar startsWith
   ignorePrefixes: [console, nintendo, nitendo, sony, playstation, video game,
                    videogame, vendo, vende se, novo, nova]
+  # cidades onde você aceita retirada em mãos; fora delas, exige entrega
+  pickupCities: ["Goiânia/GO"]
   # só problemas reais; acessórios NÃO entram aqui (ver seção 5)
   exclude: [defeito, defeituoso, quebrado, quebrada, nao liga, nao funciona,
             pecas, sucata, troco, so troca, somente troca, apenas troca,
@@ -130,7 +155,7 @@ watches:
     name: Nintendo Switch (demais modelos)
     source: olx
     query: nintendo switch
-    region: sp
+    region: brasil
     maxPrice: 1200
     minPrice: 400
     startsWith: ["switch|swich"]
@@ -166,10 +191,13 @@ Os valores de preço acima são exemplos. O usuário define os reais. Referênci
 | `include` | não | Termos que **todos** devem aparecer em qualquer ponto do título; `a\|b` aceita qualquer alternativa |
 | `exclude` | não | Termos que descartam o anúncio; somados a `defaults.exclude` |
 | `ignorePrefixes` | não | Somados a `defaults.ignorePrefixes` |
+| `pickupCities` | não | **Substitui** `defaults.pickupCities` para este produto. Formato `"Cidade/UF"`; `[]` = exige entrega em qualquer lugar |
 | `enabled` | não | `false` desativa sem apagar (padrão `true`) |
 | `webhookEnv` | não | Nome da variável de ambiente com outro webhook (ex.: um canal por produto) |
 
 \* Exatamente um entre `query` e `searchUrl`.
+
+**Compra imediata é fixa:** não existe campo para desligá-la. O adaptador da OLX sempre adiciona `opst=2` à URL, inclusive em `searchUrl`.
 
 ### Modelagem dos produtos Switch
 
@@ -193,8 +221,12 @@ Quando um acessório ou jogo é **o item vendido**, ele aparece **antes** do con
 4. **include:** todos os termos precisam aparecer em algum ponto do título normalizado, como palavra/frase inteira; `|` = alternativas.
 5. **exclude:** se qualquer termo (`defaults.exclude` ∪ `watch.exclude`) aparecer como palavra/frase inteira, o anúncio é descartado. Ex.: `troco` descarta "Pokemon Sword e Shield - Troco", mas "Avaliamos troca" passa, porque só `so troca`/`somente troca`/`apenas troca` são excluídos.
 6. **Preço:** precisa haver preço e `minPrice ≤ preço ≤ maxPrice`. Anúncio sem preço é descartado. O `minPrice` é a rede de segurança para o que escapar do texto.
-7. Anúncios "Impulsionados" **não** são descartados.
-8. O matcher retorna `{ ok: true }` ou `{ ok: false, reason }` (ex.: `startsWith`, `exclude:"defeito"`, `price>max`). O motivo é usado pelo comando `check`.
+7. **Compra imediata (fixa):** `buyable` precisa ser `true`. Caso contrário: `reason: "not-buyable"`. É uma segunda checagem: a busca já usa `opst=2`, mas o card é conferido mesmo assim.
+8. **Entrega/retirada:** se `city/state` do anúncio está em `pickupCities` (comparação normalizada e **exata** da cidade, então "Aparecida de Goiânia" ≠ "Goiânia"), o anúncio é aceito com ou sem entrega. Caso contrário, `delivery` precisa ser `true` (`reason: "no-delivery"`). Anúncio sem cidade identificável é tratado como fora das cidades de retirada.
+9. Anúncios "Impulsionados" **não** são descartados.
+10. O matcher retorna `{ ok: true }` ou `{ ok: false, reason }` (ex.: `startsWith`, `exclude:"defeito"`, `price>max`, `not-buyable`, `no-delivery`). O motivo é usado pelo comando `check`.
+
+Como hoje todo anúncio comprável tem entrega, a regra 8 não descarta nada a mais além da regra 7. Ela existe para continuar correta caso a OLX (ou outra fonte) passe a ter compra com retirada.
 
 Só o **título** é avaliado. A descrição exigiria abrir cada anúncio, o que multiplicaria as requisições.
 
@@ -255,7 +287,7 @@ Registros com `last_seen` mais antigo que `retentionDays` são removidos uma vez
 
 ### Notificação Discord
 
-- Cada alerta vira um *embed*: título clicável (link do anúncio), preço em destaque (`R$ 1.100,00`), local, horário do anúncio, nome do produto, miniatura, e etiquetas `NOVO` / `PREÇO BAIXOU de R$ X` / `AGORA DENTRO DO LIMITE` / `Impulsionado`.
+- Cada alerta vira um *embed*: título clicável (link do anúncio), preço em destaque (`R$ 1.100,00`), local, horário do anúncio, nome do produto, miniatura, forma de entrega ("🚚 Entrega Fácil" / "🚚 Frete grátis"), e etiquetas `NOVO` / `PREÇO BAIXOU de R$ X` / `AGORA DENTRO DO LIMITE` / `Impulsionado`.
 - Alertas do mesmo ciclo vão agrupados em mensagens de até 10 embeds.
 - Webhook: `watch.webhookEnv` se definido, senão `DISCORD_WEBHOOK_URL`.
 - Fila com respeito a limite de taxa: em resposta 429, aguarda `retry_after` e reenvia.
@@ -319,8 +351,9 @@ Desenvolvimento com TDD (`vitest`). **Nenhum teste automatizado acessa a OLX ou 
 | Alvo | Cobertura |
 |---|---|
 | `matcher` | normalização de acentos/maiúsculas/pontuação; remoção de prefixos repetidos; `startsWith` como palavra inteira; alternativas `\|` (incluindo "Nitendo swich lite"); soma de exclusões; limites inclusivos; sem preço; "Switch Lite R$ 950" recusado no produto "demais modelos". **Tabela de títulos reais** (`tests/fixtures/titles.json`, seção 5), com o resultado esperado por produto sem preço e com os pisos de exemplo, incluindo: aprovados "…com Case e Capas", "…Case + Película + Carregador", "Avaliamos Troca"; descartados "Case Nintendo switch LITE", "Capinha psvita 2000", "Controle Sem Fio… Switch Lite", "Jogo… PS Vita", "Yu-Gi-Oh! Rush Duel - Nintendo Switch" |
-| `config` | válido/inválido; exatamente um entre `query`/`searchUrl`; `startsWith` obrigatório; mescla de `defaults` (`exclude`, `ignorePrefixes`); recarga inválida mantém a anterior |
-| `sources/olx` | `buildUrl` (região, acentos na busca, ordenação por recentes, paginação, `searchUrl`); `extract` contra HTML real salvo em `tests/fixtures/`, carregado no Chromium sem rede; `detectBlock` com fixture de desafio |
+| `matcher` (compra/entrega) | `buyable: false` sempre recusado; dentro de `pickupCities` aceita com e sem entrega; fora exige entrega; "Aparecida de Goiânia" não casa com "Goiânia/GO"; sem cidade = fora; `pickupCities: []` no produto exige entrega em todo lugar |
+| `config` | válido/inválido; exatamente um entre `query`/`searchUrl`; `startsWith` obrigatório; mescla de `defaults` (`exclude`, `ignorePrefixes`; `pickupCities` substituído pelo do produto); formato `Cidade/UF`; recarga inválida mantém a anterior |
+| `sources/olx` | `buildUrl` (região, acentos na busca, ordenação por recentes, paginação, `searchUrl`, **`opst=2` sempre presente**); `extract` lê `buyable`/`delivery`/`deliveryLabel` dos selos ("Entrega Fácil", "Frete grátis"; só "Parcele sem juros" ⇒ não comprável) e `city`/`state` do card e do subdomínio; `extract` contra HTML real salvo em `tests/fixtures/`, carregado no Chromium sem rede; `detectBlock` com fixture de desafio |
 | `decide` | um teste por linha da tabela da seção 6 |
 | `store` | SQLite em memória: inserir, atualizar, marcar notificado, limpeza por retenção |
 | `notifiers/discord` | embed (formato BRL, etiquetas, miniatura); agrupamento em 10; `fetch` falso com 429 + `retry_after`; falha não marca como notificado |

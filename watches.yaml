@@ -1,0 +1,47 @@
+settings:
+  intervalSeconds: 30        # base entre consultas de cada produto
+  jitterSeconds: 10          # variação aleatória: ciclo entre 25s e 40s
+  headless: false            # janela visível no PC
+  notifier: discord          # usa DISCORD_WEBHOOK_URL do .env
+  initialPages: 3            # páginas lidas na primeira consulta de um produto
+  retentionDays: 30
+
+defaults:
+  # palavras ignoradas no INÍCIO do título antes de checar startsWith
+  ignorePrefixes: [console, nintendo, nitendo, sony, playstation, video game,
+                   videogame, vendo, vende se, novo, nova]
+  # cidades onde você aceita retirada em mãos; fora delas, exige entrega
+  pickupCities: ["Goiânia/GO"]
+  # só problemas reais; acessórios NÃO entram aqui (o filtro startsWith cuida deles)
+  exclude: [defeito, defeituoso, quebrado, quebrada, nao liga, nao funciona,
+            pecas, sucata, troco, so troca, somente troca, apenas troca,
+            procuro, compro, aluguel, caixa vazia, so a caixa, somente a caixa]
+
+watches:
+  - id: switch-lite
+    name: Nintendo Switch Lite
+    source: olx
+    query: switch lite
+    region: brasil
+    maxPrice: 900
+    minPrice: 400
+    startsWith: ["switch lite|swich lite|switchlite"]
+
+  - id: switch
+    name: Nintendo Switch (demais modelos)
+    source: olx
+    query: nintendo switch
+    region: brasil
+    maxPrice: 1200
+    minPrice: 400
+    startsWith: ["switch|swich"]
+    exclude: [lite]
+
+  - id: ps-vita
+    name: PS Vita
+    source: olx
+    query: ps vita
+    region: brasil
+    maxPrice: 700
+    minPrice: 300
+    startsWith: ["ps vita|psvita|vita"]
